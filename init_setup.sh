@@ -1,73 +1,65 @@
 #!/bin/bash
 
-# Update and upgrade the system
-echo "Updating and upgrading the system..."
-sudo pacman -Syu --noconfirm
-
-# Install basic dependencies
-echo "Installing basic dependencies..."
-sudo pacman -S --noconfirm git base-devel
-
-# Install yay (AUR helper)
-echo "Installing yay..."
-git clone https://aur.archlinux.org/yay.git
-cd yay
-makepkg -si --noconfirm
-
-# After installation, delete the cloned yay folder
-cd ..
-rm -rf yay
-echo "yay installed and the folder has been removed."
-
-# Install NVIDIA drivers and related packages
-echo "Installing NVIDIA drivers and related packages..."
-sudo pacman -S --noconfirm nvidia-dkms nvidia-dkms lib32-nvidia-utils egl-wayland libva-nvidia-driver
-
-# Detect NVIDIA GPU and modify bootloader if detected
-nvidia_detect() {
-    readarray -t dGPU < <(lspci -k | grep -E "(VGA|3D)" | awk -F ': ' '{print $NF}')
-    if [ "${1}" == "--verbose" ]; then
-        for indx in "${!dGPU[@]}"; do
-            echo -e "\033[0;32m[gpu$indx]\033[0m detected // ${dGPU[indx]}"
-        done
-        return 0
-    fi
-    if [ "${1}" == "--drivers" ]; then
-        while read -r -d ' ' nvcode ; do
-            awk -F '|' -v nvc="${nvcode}" 'substr(nvc,1,length($3)) == $3 {split(FILENAME,driver,"/"); print driver[length(driver)],"\nnvidia-utils"}' "${scrDir}"/.nvidia/nvidia*dkms
-        done <<< "${dGPU[@]}"
-        return 0
-    fi
-    if grep -iq nvidia <<< "${dGPU[@]}"; then
-        return 0
-    else
-        return 1
-    fi
+# Function to handle errors and log them
+log_error() {
+    echo "[ERROR] $1"
+    exit 1
 }
 
-# Check if NVIDIA GPU is detected
-if nvidia_detect; then
-    echo -e "\033[0;32m[BOOTLOADER]\033[0m NVIDIA detected, adding nvidia_drm.modeset=1 to boot option..."
+log_success() {
+    echo "[SUCCESS] $1"
+}
 
-    # Modify GRUB to include nvidia_drm.modeset=1
-    sudo sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT=\"\).*\"\$/\1nvidia_drm.modeset=1\"/' /etc/default/grub
+# Step 1: Install linux-headers, dkms, and nvidia-dkms
+echo "Installing linux-headers, dkms, and nvidia-dkms..."
+sudo pacman -Syu --noconfirm || log_error "Failed to update the system."
+sudo pacman -S --noconfirm linux-headers dkms nvidia-dkms || log_error "Failed to install linux-headers, dkms, or nvidia-dkms."
+log_success "linux-headers, dkms, and nvidia-dkms installed successfully."
 
-    # Regenerate GRUB configuration
-    sudo grub2-mkconfig -o /boot/grub/grub.cfg
+# Step 2: Install yay (AUR helper)
+echo "Installing yay..."
+git clone https://aur.archlinux.org/yay.git || log_error "Failed to clone yay repository."
+cd yay || log_error "Failed to enter yay directory."
+makepkg -si --noconfirm || log_error "Failed to install yay."
+cd .. || log_error "Failed to go back to the previous directory."
+rm -rf yay || log_error "Failed to remove the yay folder."
+log_success "yay installed and the folder removed."
+
+# Step 3: Install additional packages using yay
+echo "Installing packages using yay..."
+yay -S --noconfirm asusctl supergfxctl rog-control-center thunar stow kitty mako cliphist \
+    brightnessctl blueman ttf-jetbrains-mono-nerd lxqt-policykit hyprland hyprpaper hyprlock \
+    hypridle rofi xorg-xwayland xdg-desktop-portal-hyprland pavucontrol power-profiles-daemon \
+    spotify-launcher google-chrome visual-studio-code-bin github-cli btop waybar zsh || log_error "Failed to install one or more packages using yay."
+log_success "All packages installed successfully."
+
+# Step 4: Set zsh as the default shell
+echo "Setting zsh as the default shell..."
+chsh -s /bin/zsh || log_error "Failed to set zsh as the default shell."
+log_success "zsh set as the default shell."
+
+# Step 5: Check for existing Hyprland config and delete it
+if [ -d "$HOME/.config/hypr" ]; then
+    echo "Deleting existing ~/.config/hypr directory..."
+    rm -rf "$HOME/.config/hypr" || log_error "Failed to remove existing Hyprland config."
+    log_success "Existing Hyprland config removed."
 else
-    echo -e "\033[0;31m[BOOTLOADER]\033[0m NVIDIA not detected."
+    echo "No existing ~/.config/hypr directory found."
 fi
 
-# Install additional packages for Hyprland and system setup
-echo "Installing additional packages..."
-sudo pacman -S --noconfirm dolphin hyprland stow kitty mako nwg-bar cliphist \
-    brightnessctl waybar power-profiles-daemon asusctl supergfxctl rog-control-center \
-    spotify-launcher blueman network-manager-applet xorg-xwayland xdg-desktop-portal-hyprland \
-    ttf-jetbrains-mono-nerd lxqt-policykit pavucontrol
+# Step 6: Clone DotFiles repository and run stow
+echo "Cloning DotFiles repository..."
+git clone https://github.com/dlsathvik04/DotFiles.git "$HOME/DotFiles" || log_error "Failed to clone DotFiles repository."
+cd "$HOME/DotFiles" || log_error "Failed to enter DotFiles directory."
+stow . || log_error "Failed to run stow in DotFiles directory."
+log_success "DotFiles repository cloned and stow applied."
 
-# Enable services for power management and hybrid graphics
-echo "Enabling supergfxd and power-profiles-daemon services..."
-sudo systemctl enable supergfxd
-sudo systemctl enable power-profiles-daemon
-
-echo "Script completed successfully!"
+# Step 7: Notify user and prompt for system reboot
+echo "System setup completed successfully!"
+read -p "Do you want to reboot your system now? (y/n): " response
+if [[ "$response" =~ ^[Yy]$ ]]; then
+    echo "Rebooting the system..."
+    sudo reboot
+else
+    echo "Please remember to reboot your system later."
+fi
